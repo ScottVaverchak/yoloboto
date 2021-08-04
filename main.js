@@ -1,44 +1,101 @@
 const { promises: fs } = require('fs')
 const fetch = require('node-fetch')
-const Discord = require('discord.js');
-const client = new Discord.Client();
+const {Client, Intents} = require('discord.js');
+const client = new Client({intents: [
+    
+    Intents.FLAGS.GUILDS,
+    Intents.FLAGS.GUILD_MESSAGES,
+    Intents.FLAGS.GUILD_MESSAGE_REACTIONS,
+    Intents.FLAGS.GUILD_MESSAGE_TYPING,
+    Intents.FLAGS.DIRECT_MESSAGES,
+]});
 
 let keys
 const commands = [
     { command: '$$GME', desc: 'Replace GME with with your favorite stock' },
 ]
 
-// https://stackoverflow.com/questions/40263803/native-javascript-or-es6-way-to-encode-and-decode-html-entities 
-// JavaScript is the future - this is fine...
-const escapeHTML = str => str.replace(/[&<>'"]/g,
-    tag => ({
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        "'": '&#39;',
-        '"': '&quot;'
-    }[tag]));
-
 const asMoney = n => n.toLocaleString('en-US', { style: 'currency', currency: 'USD' })
 
 const toTheMoon = n => n > 25 ? '🚀🌑' : ''
 
 const main = async () => {
-    const fileData = await (await fs.readFile('secret', 'utf8')).trim()
-    keys = fileData.split('\n').reduce((prev, curr) => {
-        const [key, value] = curr.split(':')
-        prev[key] = value
-        return prev
-    }, {})
 
-    client.on('ready', () => {
+    try {
+        const fileData = (await fs.readFile('secret', 'utf8')).trim()
+        keys = fileData.split('\n').reduce((prev, curr) => {
+            const [key, value] = curr.split(':')
+            prev[key] = value.trim()
+            return prev
+        }, {})
+    } catch(error) { console.log(error)}
+
+    const crytpoCommand = {
+        name: 'crypto',
+        description: 'Crypto',
+        options: [{
+          name: 'coin',
+          type: 'STRING',
+          description: 'The crypto.',
+          required: true,
+        }],
+      }
+
+      const stockCommand = {
+        name: 'stock',
+        description: 'Stonks',
+        options: [{
+          name: 'stock',
+          type: 'STRING',
+          description: 'The stonk.',
+          required: true,
+        }],
+      }
+
+      client.once('ready', async () => {
+        const fileData = (await fs.readFile('guilds', 'utf8')).trim().split()
+        
+        fileData.forEach(x => {
+            client.guilds.cache.get(x).commands.create(crytpoCommand)
+            client.guilds.cache.get(x).commands.create(stockCommand)
+        })
+        
         console.log('I am ready!');
     });
 
+    client.on('interaction', async interaction => {
+        if (!interaction.isCommand()) return;
+
+        if(interaction.commandName === 'stock') {
+            const sym = interaction.options.get('stock').value
+            const {ok, reply} = await getStock(sym)
+            interaction.reply(reply)  
+        }
+
+        if (interaction.commandName === 'crypto') {
+          const sym = interaction.options.get('coin').value
+          const {ok, reply} = await getCrypto(sym)
+          interaction.reply(reply)
+        }
+      })
+
+
     // @TODO(svavs): There is a pattern forming between commands and how messages are invoked
     client.on('message', async message => {
+        if (message.author.bot) return false
+        
+        if(message.content.substr(0, 3) === ('$$$')) {
+            const sym = message.content.split(' ')[0].substr(3)
+            console.log(`Crypto: ${sym}`)
+            const {ok, reply} = await getCrypto(sym)
+            if(ok) {
+                message.channel.send(reply)
+            }
 
-        if (message.content.includes('$$') && message.content.substr(0, 2) !== '$$') {
+            return
+        }
+        // STONKS [..--'] <- chart of gains
+        else if (message.content.includes('$$') && message.content.substr(0, 2) !== '$$') {
             const [j1, symsec] = message.content.split('$$')
             const [sym, j2] = symsec.split(' ')
             const { ok, reply } = await getStock(sym)
@@ -50,7 +107,7 @@ const main = async () => {
             return
         }
 
-        if (message.content.substr(0, 2) !== '$$') return
+        if (message.content.substr(0, 2) !== '$$' || message.content.substr(0, 3) === '$$$') return
 
         const uc = message.content.substr(2)
         const ucl = uc.toLowerCase()
@@ -59,9 +116,6 @@ const main = async () => {
 
         if (ucl.slice(0, 1) == '^') {
             message.channel.send('Indices are not implemented yet')
-        } else if (ucl === 'help') {
-            const cons = commands.reduce((prev, curr) => `${prev}\t**${curr.command}:**\t ${curr.desc}\n`, '')
-            message.channel.send(`List of commands: \n${cons}`)
         } else {
             const [sym, j3] = uc.split(' ')
             const { ok, reply } = await getStock(sym)
@@ -70,7 +124,47 @@ const main = async () => {
         }
     });
 
-    client.login(keys['DISCORD']);
+
+        
+    try { 
+        await client.login(keys['DISCORD'])
+    } catch (err) { 
+        console.log(err)
+    }
+    
+}
+
+const getCrypto = async (sym) => {
+    try {
+        const curl = `https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest?convert=USD&symbol=${sym}`
+
+        const data = await fetch(curl, {
+            headers:{
+                'X-CMC_PRO_API_KEY': keys['COINMARKETCAP'],
+                'Accept': 'application/json'
+            }
+        })
+
+        if(!data.ok) {
+            console.log('OH NO')
+            console.log(await data.json())
+            return { ok: false, reply: `Pooped myself :(`}
+        }
+
+        const stonks = await data.json()
+        const name = stonks.data[sym.toUpperCase()].name
+        const quote = stonks.data[sym.toUpperCase()].quote['USD']
+        const price = quote.price
+        const stats = x => x > 0 ? ['📈', '+'] : ['📉', '']
+        const percents = [{ name: 'Hour', pct: quote.percent_change_1h }, {name: 'Day', pct: quote.percent_change_24h}]
+        const reply = percents.reduce((p, c) => p + `\tPast ${c.name}: ${stats(c.pct)[1]}${asMoney((c.pct / 100.0) * price)} (${stats(c.pct)[1]}${c.pct.toFixed(2)}%) ${stats(c.pct)[0]} ${toTheMoon(c.pct)}\n`, `**${sym.toUpperCase()} (${name})**: ${asMoney(price)}\n`)
+
+        return { ok: true, reply }
+
+    } catch (error) {
+        console.log(error)
+        return { ok: false, reply: 'Oh no, I pooped myself 😞' }
+    }
 }
 
 const getStock = async (sym) => {
@@ -83,7 +177,6 @@ const getStock = async (sym) => {
         }
 
         const stocks = await data.json()
-        console.log(stocks)
         if (stocks.quoteResponse.result === undefined || stocks.quoteResponse.result.length === 0) {
             return { ok: false, reply: `Unable to locate **${sym}**` }
         }
@@ -133,4 +226,7 @@ const getStock = async (sym) => {
 
 }
 
-(async () => await main())()
+
+(async () => { 
+        await main()
+})()

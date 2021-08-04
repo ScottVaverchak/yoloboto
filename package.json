@@ -10,7 +10,7 @@
   "author": "Scott Vaverchak",
   "license": "ISC",
   "dependencies": {
-    "discord.js": "^12.5.1",
+    "discord.js": "^13.0.0-dev.918921e8211fc16e9b12d2502f3168264246ea22",
     "node-fetch": "^2.6.1"
   }
 }
